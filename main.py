@@ -1,5 +1,6 @@
 import os
 import boto3
+import psutil
 from fastapi import FastAPI, File, UploadFile, HTTPException
 
 app = FastAPI()
@@ -19,6 +20,12 @@ s3_client = boto3.client(
     region_name="us-east-1"
 )
 
+def get_memory_usage_gb():
+    """Returns the current memory usage of the process in GB."""
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info().rss  # Resident Set Size (bytes)
+    return mem_info / (1024 ** 3)  # Convert to GB
+
 @app.post("/upload-s3/")
 async def upload_to_s3(file: UploadFile = File(...)):
     key = file.filename  # You can also customize the key name
@@ -32,14 +39,17 @@ async def upload_to_s3(file: UploadFile = File(...)):
     upload_id = mpu["UploadId"]
     parts = []
     part_number = 1
-    # S3 requires a minimum part size of 5MB (except for the last part)
-    chunk_size = 5 * 1024 * 1024  
+    chunk_size = 5 * 1024 * 1024  # 5MB
 
     try:
         while True:
             chunk = await file.read(chunk_size)
             if not chunk:
                 break  # End of file reached
+            
+            mem_usage = get_memory_usage_gb()
+            print(f"Memory usage before uploading part {part_number}: {mem_usage:.4f} GB")
+            
             response = s3_client.upload_part(
                 Bucket=BUCKET_NAME,
                 Key=key,
@@ -47,6 +57,10 @@ async def upload_to_s3(file: UploadFile = File(...)):
                 UploadId=upload_id,
                 Body=chunk
             )
+            
+            mem_usage = get_memory_usage_gb()
+            print(f"Memory usage after uploading part {part_number}: {mem_usage:.4f} GB")
+            
             parts.append({
                 "ETag": response["ETag"],
                 "PartNumber": part_number
